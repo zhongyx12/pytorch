@@ -10,6 +10,54 @@
 
 namespace pytorch_jni {
 
+bool Trace::is_initialized_ = false;
+
+#if defined(TRACE_ENABLED) && defined(__ANDROID__)
+Trace::fp_ATrace_beginSection Trace::ATrace_beginSection = {};
+Trace::fp_ATrace_endSection Trace::ATrace_endSection = {};
+#endif
+
+void Trace::ensureInit() {
+  if (!Trace::is_initialized_) {
+    init();
+    Trace::is_initialized_ = true;
+  }
+}
+
+void Trace::beginSection(const char* name) {
+  Trace::ensureInit();
+#if defined(TRACE_ENABLED) && defined(__ANDROID__)
+  ATrace_beginSection(name);
+#endif
+}
+
+void Trace::endSection() {
+#if defined(TRACE_ENABLED) && defined(__ANDROID__)
+  ATrace_endSection();
+#endif
+}
+
+Trace::Trace(const char* name) {
+  ensureInit();
+  beginSection(name);
+}
+
+Trace::~Trace() {
+  endSection();
+}
+
+void Trace::init() {
+#if defined(TRACE_ENABLED) && defined(__ANDROID__)
+  void* lib = dlopen("libandroid.so", RTLD_NOW || RTLD_LOCAL);
+  if (lib != NULL) {
+    ATrace_beginSection = reinterpret_cast<fp_ATrace_beginSection>(
+        dlsym(lib, "ATrace_beginSection"));
+    ATrace_endSection =
+        reinterpret_cast<fp_ATrace_endSection>(dlsym(lib, "ATrace_endSection"));
+  }
+#endif
+}
+
 // NOTE: Codes must be kept in sync with DType.java.
 // NOTE: Never serialize these, because they can change between releases.
 constexpr static int kTensorDTypeUInt8 = 1;
@@ -25,7 +73,7 @@ struct JHashMap
   constexpr static auto kJavaDescriptor = "Ljava/util/HashMap;";
 
   using Super =
-  facebook::jni::JavaClass<JHashMap<K, V>, facebook::jni::JMap<K, V>>;
+      facebook::jni::JavaClass<JHashMap<K, V>, facebook::jni::JMap<K, V>>;
 
   static facebook::jni::local_ref<JHashMap<K, V>> create() {
     return Super::newInstance();
@@ -103,7 +151,7 @@ static at::Tensor newAtTensor(
 }
 
 class JTensor : public facebook::jni::JavaClass<JTensor> {
-public:
+ public:
   constexpr static const char* kJavaDescriptor = "Lorg/pytorch/Tensor;";
 
   static facebook::jni::local_ref<JTensor> newJTensor(
@@ -186,6 +234,7 @@ public:
 
 facebook::jni::local_ref<JIValue> JIValue::newJIValueFromAtIValue(
     const at::IValue& ivalue) {
+  Trace _s{"jni::JIValue::newJIValueFromAtIValue"};
   if (ivalue.isNone()) {
     static auto jMethodOptionalNull =
         JIValue::javaClassStatic()
@@ -209,8 +258,7 @@ facebook::jni::local_ref<JIValue> JIValue::newJIValueFromAtIValue(
   } else if (ivalue.isInt()) {
     static auto jMethodInt =
         JIValue::javaClassStatic()
-            ->getStaticMethod<facebook::jni::local_ref<JIValue>(jlong)>(
-                "from");
+            ->getStaticMethod<facebook::jni::local_ref<JIValue>(jlong)>("from");
     return jMethodInt(JIValue::javaClassStatic(), ivalue.toInt());
   } else if (ivalue.isDouble()) {
     static auto jMethodDouble =
@@ -222,8 +270,8 @@ facebook::jni::local_ref<JIValue> JIValue::newJIValueFromAtIValue(
     static auto jMethodString =
         JIValue::javaClassStatic()
             ->getStaticMethod<facebook::jni::local_ref<JIValue>(
-                facebook::jni::alias_ref<
-                    facebook::jni::JString::javaobject>)>("from");
+                facebook::jni::alias_ref<facebook::jni::JString::javaobject>)>(
+                "from");
     return jMethodString(
         JIValue::javaClassStatic(),
         facebook::jni::make_jstring(ivalue.toStringRef()));
@@ -291,8 +339,8 @@ facebook::jni::local_ref<JIValue> JIValue::newJIValueFromAtIValue(
             ->getStaticMethod<facebook::jni::local_ref<JIValue>(
                 facebook::jni::alias_ref<facebook::jni::JArrayClass<
                     JTensor::javaobject>::javaobject>)>("listFrom");
-    auto jArray = facebook::jni::JArrayClass<JTensor::javaobject>::newArray(
-        list.size());
+    auto jArray =
+        facebook::jni::JArrayClass<JTensor::javaobject>::newArray(list.size());
     auto index = 0;
     for (const auto& e : list) {
       (*jArray)[index++] = JTensor::newJTensorFromAtTensor(e);
@@ -305,8 +353,8 @@ facebook::jni::local_ref<JIValue> JIValue::newJIValueFromAtIValue(
             ->getStaticMethod<facebook::jni::local_ref<JIValue>(
                 facebook::jni::alias_ref<facebook::jni::JArrayClass<
                     JIValue::javaobject>::javaobject>)>("listFrom");
-    auto jArray = facebook::jni::JArrayClass<JIValue::javaobject>::newArray(
-        list.size());
+    auto jArray =
+        facebook::jni::JArrayClass<JIValue::javaobject>::newArray(list.size());
     auto index = 0;
     for (const auto& e : list) {
       (*jArray)[index++] = JIValue::newJIValueFromAtIValue(e);
@@ -375,6 +423,7 @@ facebook::jni::local_ref<JIValue> JIValue::newJIValueFromAtIValue(
 
 at::IValue JIValue::JIValueToAtIValue(
     facebook::jni::alias_ref<JIValue> jivalue) {
+  Trace _s{"jni::JIValue::JIValueToAtIValue"};
   static const auto typeCodeField =
       JIValue::javaClassStatic()->getField<jint>("mTypeCode");
   const auto typeCode = jivalue->getFieldValue(typeCodeField);
@@ -408,8 +457,9 @@ at::IValue JIValue::JIValueToAtIValue(
   } else if (JIValue::kTypeCodeTuple == typeCode) {
     static const auto jMethodGetTuple =
         JIValue::javaClassStatic()
-            ->getMethod<facebook::jni::JArrayClass<
-                JIValue::javaobject>::javaobject()>("toTuple");
+            ->getMethod<
+                facebook::jni::JArrayClass<JIValue::javaobject>::javaobject()>(
+                "toTuple");
     auto jarray = jMethodGetTuple(jivalue);
     size_t n = jarray->size();
 
@@ -447,8 +497,7 @@ at::IValue JIValue::JIValueToAtIValue(
     return at::IValue{std::move(list)};
   } else if (JIValue::kTypeCodeDoubleList == typeCode) {
     static const auto jMethodGetDoubleList =
-        JIValue::javaClassStatic()->getMethod<jdoubleArray()>(
-            "toDoubleList");
+        JIValue::javaClassStatic()->getMethod<jdoubleArray()>("toDoubleList");
     auto jArray = jMethodGetDoubleList(jivalue);
     auto jArrayPinned = jArray->pin();
     size_t n = jArrayPinned.size();
@@ -461,8 +510,9 @@ at::IValue JIValue::JIValueToAtIValue(
   } else if (JIValue::kTypeCodeTensorList == typeCode) {
     static const auto jMethodGetTensorList =
         JIValue::javaClassStatic()
-            ->getMethod<facebook::jni::JArrayClass<
-                JTensor::javaobject>::javaobject()>("toTensorList");
+            ->getMethod<
+                facebook::jni::JArrayClass<JTensor::javaobject>::javaobject()>(
+                "toTensorList");
     auto jArray = jMethodGetTensorList(jivalue);
     size_t n = jArray->size();
     c10::List<at::Tensor> list{};
@@ -474,8 +524,9 @@ at::IValue JIValue::JIValueToAtIValue(
   } else if (JIValue::kTypeCodeList == typeCode) {
     static const auto jMethodGetList =
         JIValue::javaClassStatic()
-            ->getMethod<facebook::jni::JArrayClass<
-                JIValue::javaobject>::javaobject()>("toList");
+            ->getMethod<
+                facebook::jni::JArrayClass<JIValue::javaobject>::javaobject()>(
+                "toList");
     auto jarray = jMethodGetList(jivalue);
     size_t n = jarray->size();
     if (n == 0) {
@@ -498,7 +549,7 @@ at::IValue JIValue::JIValueToAtIValue(
     static const auto jMethodGetDictStringKey =
         JIValue::javaClassStatic()
             ->getMethod<facebook::jni::JMap<jstring, JIValue::javaobject>::
-            javaobject()>("toDictStringKey");
+                            javaobject()>("toDictStringKey");
     auto jmap = jMethodGetDictStringKey(jivalue);
     auto it = jmap->begin();
     if (it == jmap->end()) {
@@ -507,7 +558,7 @@ at::IValue JIValue::JIValueToAtIValue(
     }
 
     auto firstEntryValue = JIValue::JIValueToAtIValue(it->second);
-    c10::TypePtr typePtr =  firstEntryValue.type();
+    c10::TypePtr typePtr = firstEntryValue.type();
     c10::impl::GenericDict dict{c10::StringType::get(), typePtr};
     dict.insert(it->first->toStdString(), firstEntryValue);
     it++;
@@ -525,8 +576,8 @@ at::IValue JIValue::JIValueToAtIValue(
     auto jmap = jMethodGetDictLongKey(jivalue);
     auto it = jmap->begin();
     if (it == jmap->end()) {
-      return at::IValue{c10::impl::GenericDict(
-          c10::IntType::get(), c10::TensorType::get())};
+      return at::IValue{
+          c10::impl::GenericDict(c10::IntType::get(), c10::TensorType::get())};
     }
 
     auto firstEntryValue = JIValue::JIValueToAtIValue(it->second);
@@ -536,7 +587,8 @@ at::IValue JIValue::JIValueToAtIValue(
     it++;
     for (; it != jmap->end(); it++) {
       dict.insert(
-          (int64_t)it->first->longValue(), JIValue::JIValueToAtIValue(it->second));
+          (int64_t)it->first->longValue(),
+          JIValue::JIValueToAtIValue(it->second));
     }
     return at::IValue{dict};
   }
