@@ -115,10 +115,25 @@ template <typename Derived>
 void RNNImplBase<Derived>::pretty_print(std::ostream& stream) const {
   const std::string name = this->name();
   const std::string name_without_impl = name.substr(0, name.size() - 4);
-  stream << name_without_impl << "(input_size=" << options.input_size()
-         << ", hidden_size=" << options.hidden_size()
-         << ", layers=" << options.num_layers() << ", dropout=" << options.dropout()
-         << ")";
+  stream << name_without_impl
+         << "(" << options.input_size()
+         << ", " << options.hidden_size();
+  if (options.num_layers() != 1) {
+    stream << ", num_layers=" << options.num_layers();
+  }
+  if (!options.bias()) {
+    stream << ", bias=" << options.bias();
+  }
+  if (options.batch_first()) {
+    stream << ", batch_first=" << options.batch_first();
+  }
+  if (options.dropout() != 0) {
+    stream << ", dropout=" << options.dropout();
+  }
+  if (options.bidirectional()) {
+    stream << ", bidirectional=" << options.bidirectional();
+  }
+  stream << ")";
 }
 
 template <typename Derived>
@@ -219,32 +234,43 @@ RNNImpl::RNNImpl(const RNNOptions& options_)
               .dropout(options_.dropout())
               .bidirectional(options_.bidirectional())
               .batch_first(options_.batch_first()),
-          static_cast<CuDNNMode>(options_.nonlinearity())),
+          cudnnmode_get_enum(options_.nonlinearity())),
       options(options_) {}
 
 void RNNImpl::pretty_print(std::ostream& stream) const {
-  stream << "torch::nn::RNN(input_size=" << options.input_size()
-         << ", hidden_size=" << options.hidden_size()
-         << ", layers=" << options.num_layers() << ", dropout=" << options.dropout()
-         << ", activation="
-         << (options.nonlinearity() == RNNActivation::Tanh ? "tanh" : "relu")
-         << ")";
+  stream << "torch::nn::RNN(" << options.input_size()
+         << ", " << options.hidden_size();
+  if (options.num_layers() != 1) {
+    stream << ", num_layers=" << options.num_layers();
+  }
+  if (!options.bias()) {
+    stream << ", bias=" << options.bias();
+  }
+  if (options.batch_first()) {
+    stream << ", batch_first=" << options.batch_first();
+  }
+  if (options.dropout() != 0) {
+    stream << ", dropout=" << options.dropout();
+  }
+  if (options.bidirectional()) {
+    stream << ", bidirectional=" << options.bidirectional();
+  }
+  stream << ")";
 }
 
 RNNOutput RNNImpl::forward(const Tensor& input, Tensor state) {
-  switch (options.nonlinearity()) {
-    case RNNActivation::ReLU:
-      return generic_forward(
-          static_cast<RNNFunctionSignature*>(&torch::rnn_relu),
-          input,
-          std::move(state));
-    case RNNActivation::Tanh:
-      return generic_forward(
-          static_cast<RNNFunctionSignature*>(&torch::rnn_tanh),
-          input,
-          std::move(state));
-    default:
-      AT_ERROR("Unhandled RNN activation function!");
+  if (c10::get_if<enumtype::kReLU>(&options.nonlinearity())) {
+    return generic_forward(
+      static_cast<RNNFunctionSignature*>(&torch::rnn_relu),
+      input,
+      std::move(state));
+  } else if (c10::get_if<enumtype::kTanh>(&options.nonlinearity())) {
+    return generic_forward(
+      static_cast<RNNFunctionSignature*>(&torch::rnn_tanh),
+      input,
+      std::move(state));
+  } else {
+    AT_ERROR("Unknown nonlinearity");
   }
 }
 
