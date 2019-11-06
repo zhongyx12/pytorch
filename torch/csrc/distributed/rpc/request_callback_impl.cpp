@@ -64,6 +64,8 @@ Message RequestCallbackImpl::processRpc(
           .toMessage();
     }
     case MessageType::SCRIPT_REMOTE_CALL: {
+      auto agent = RpcAgent::getDefaultRpcAgent();
+      std::cout << agent->getWorkerInfo().id_ << " ++ in script remote call \n" << std::flush;
       auto& src = static_cast<ScriptRemoteCall&>(rpc);
       auto& ctx = RRefContext::getInstance();
 
@@ -72,7 +74,11 @@ Message RequestCallbackImpl::processRpc(
       // TODO: make this asynchronous
       // src is only alive within this block, use reference to avoid copy
       auto& stack = src.stackRef();
+      std::cout << agent->getWorkerInfo().id_ << " ++ in script remote call before op \n" << std::flush;
+
       src.op()->getOperation()(stack);
+      std::cout << agent->getWorkerInfo().id_ << " ++ in script remote call after op \n" << std::flush;
+
       TORCH_INTERNAL_ASSERT(
           stack.size() == 1,
           "Return value of a builtin operator or a "
@@ -80,7 +86,12 @@ Message RequestCallbackImpl::processRpc(
           "size ",
           stack.size());
 
+      std::cout << agent->getWorkerInfo().id_ << " ++ in script remote call after assert \n" << std::flush;
+
+
       ownerRRef->setValue(std::move(stack.front()));
+      std::cout << agent->getWorkerInfo().id_ << " ++ in script remote call set value \n" << std::flush;
+
       ctx.addForkOfOwner(src.retRRefId(), src.retForkId());
       return RemoteRet(src.retRRefId(), src.retForkId()).toMessage();
     }
@@ -99,12 +110,17 @@ Message RequestCallbackImpl::processRpc(
       return RemoteRet(rrefId, forkId).toMessage();
     }
     case MessageType::SCRIPT_RREF_FETCH_CALL: {
+      auto agent = RpcAgent::getDefaultRpcAgent();
+      std::cout << agent->getWorkerInfo().id_ << " ++ in script fetch all for \n" << std::flush;
       auto& srf = static_cast<ScriptRRefFetchCall&>(rpc);
       auto& ctx = RRefContext::getInstance();
       // TODO: make this asynchronous
       std::shared_ptr<OwnerRRef<IValue>> rref =
           ctx.getOrCreateOwnerRRef<IValue>(srf.rrefId());
-      return ScriptRRefFetchRet({rref->getValue()}).toMessage();
+      std::cout << agent->getWorkerInfo().id_ << " ++ before getting value of " << rref->rrefId() << std::endl << std::flush;
+      auto ret = {rref->getValue()};
+      std::cout << agent->getWorkerInfo().id_ << " ++ got value \n" << std::flush;
+      return ScriptRRefFetchRet(ret).toMessage();
     }
     case MessageType::PYTHON_RREF_FETCH_CALL: {
       auto& prf = static_cast<PythonRRefFetchCall&>(rpc);
