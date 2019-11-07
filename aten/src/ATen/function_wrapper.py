@@ -290,7 +290,7 @@ static inline ${return_type} _${api_name}(${formals}) {
 #ifdef USE_STATIC_DISPATCH
     ${static_dispatch_function_body}
 #else
-    //globalLegacyTypeDispatch().initForTensorTypeSet(${inferred_type_set}); // [CHECK THIS]
+    globalLegacyTypeDispatch().initForTensorTypeSet(${inferred_type_set});
     static c10::OperatorHandle op = c10::Dispatcher::singleton()
         .findSchema({"aten::${operator_name}", "${overload_name}"}).value();
     return c10::Dispatcher::singleton().callUnboxedOnly<${formals_types_with_return}>(
@@ -745,7 +745,10 @@ def device_guard(option, dispatch_options, dispatch_tensor):
     # For factory methods the `DeviceGuard` is already in the template.
     if option.get('device_guard', True):
         if dispatch_options:
-            return '// const DeviceGuard device_guard(device.value()); // [CHECK THIS]' 
+            if any(arg['type'] == 'c10::optional<ScalarType>' for arg in option['arguments']):
+                return 'auto dev = device.has_value() ? device.value() : Device(kCPU);\nconst DeviceGuard device_guard(dev); // [CHECK THIS]' 
+            else:    
+                return 'const DeviceGuard device_guard(device); '
         if dispatch_tensor:
             return 'const OptionalDeviceGuard device_guard(device_of({}));'.format(dispatch_tensor)
     return '// DeviceGuard omitted'
@@ -1001,6 +1004,9 @@ def create_generic(top_env, declarations):
             
             if formal['dynamic_type'] in ['TensorList'] or is_any_tensor_type(formal):
                 r.append(formal['name'])
+        
+        if check_if_factory_method(formals):
+            r.append('TensorOptions().dtype(dtype).device(device).layout(layout).pinned_memory(pin_memory)')
         return r
 
     def format_formal(f):
@@ -1421,6 +1427,7 @@ def create_generic(top_env, declarations):
 
         def gen_namespace_function(option, multidispatch_tensors):
             # type: (Any, List[str]) -> FunctionCode
+            
             option['inferred_type_set'] = (
                 'c10::detail::multi_dispatch_tensor_type_set({})'.format(', '.join(multidispatch_tensors)))
             declaration = DEPRECATED_FUNCTION_DECLARATION if option['deprecated'] else FUNCTION_DECLARATION
