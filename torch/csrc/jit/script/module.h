@@ -227,6 +227,10 @@ struct TORCH_API Module {
     return module_object()->type()->findAttributeSlot(name).has_value();
   }
 
+  c10::optional<IValue> find_constant(const std::string& name) const {
+    return type()->findConstant(name);
+  }
+
   // each module owns its method. The reference returned here
   // is guarenteed to stay valid until this module has been destroyed
   Method get_method(const std::string& name) const {
