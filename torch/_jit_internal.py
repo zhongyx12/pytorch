@@ -125,12 +125,37 @@ def createResolutionCallbackFromClosure(fn):
     """
     closure = get_closure(fn)
 
-    def env(key):
+    def resolve_on_value(key, module):
+        pieces = key.split('.')
+        key = pieces[0]
+        if len(pieces) == 1:
+            return value
+
+        return env(".".join(pieces[1:]), value)
+        return getattr(module, key)
+
+    def env(key, module=None):
+        pieces = key.split('.')
+        key = pieces[0]
+
+        print(module, pieces)
+        if module is not None:
+            value = getattr(module, key, None)
+            if len(pieces) == 1:
+                print("got value", value, type(value))
+                return value
+            else:
+                return env(".".join(pieces[1:]), value)
+
         if key in closure:
-            return closure[key]
+            value = closure[key]
         elif hasattr(builtins, key):
-            return getattr(builtins, key)
-        return None
+            value = getattr(builtins, key)
+        else:
+            value = None
+        if len(pieces) == 1:
+            return value
+        return env(".".join(pieces[1:]), value)
 
     return env
 
