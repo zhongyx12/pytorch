@@ -15,7 +15,6 @@ from torch import nn
 from torch.autograd import Variable, function
 import torch.utils.model_zoo as model_zoo
 from torch.nn.utils import rnn as rnn_utils
-import torch.nn.quantized as nnq
 from debug_embed_params import run_embed_params
 import io
 import os
@@ -2441,11 +2440,16 @@ TestCaffe2BackendEmbed_opset10 = type(str("TestCaffe2BackendEmbed_opset10"),
 
 
 class TestQuantizedOps(unittest.TestCase):
-    def generic_test(self, model, sample_inputs):
+    def generic_test(self, model, sample_inputs, input_names=None):
+        pt_inputs = tuple(torch.from_numpy(x) for x in sample_inputs)
         model.qconfig = torch.quantization.default_qconfig
         q_model = torch.quantization.prepare(model, inplace=False)
         q_model = torch.quantization.convert(q_model, inplace=False)
-        torch.onnx.export(q_model, sample_inputs, os.path.join("model.onnx"), operator_export_type=torch.onnx.OperatorExportTypes.ONNX_ATEN_FALLBACK)
+        pytorch_res = q_model(*pt_inputs)
+        torch.onnx.export(q_model, pt_inputs, os.path.join("model.onnx"), verbose=True, input_names=input_names, operator_export_type=torch.onnx.OperatorExportTypes.ONNX_ATEN_FALLBACK)
+        onnx_model = onnx.load('model.onnx')
+        caffe_res = c2.run_model(onnx_model, dict(zip(input_names, sample_inputs)))[0]
+        np.testing.assert_almost_equal(pytorch_res.numpy(), caffe_res, decimal=3)
 
     def generic_unary_test(self, op):
         class QModule(torch.nn.Module):
@@ -2453,11 +2457,14 @@ class TestQuantizedOps(unittest.TestCase):
                 super(QModule, self).__init__()
                 self.quant1 = torch.quantization.QuantStub()
                 self.op = op
+                self.dequant = torch.quantization.DeQuantStub()
 
             def forward(self, x):
-                return self.op(self.quant1(x))
+                res = self.op(self.quant1(x))
+                return self.dequant(res)
 
-        self.generic_test(QModule(op), (torch.tensor([[3.0, 4.0]])))
+        x = np.random.random((1, 2)).astype("float32")
+        self.generic_test(QModule(op), (x,), input_names=["x"])
 
     def test_quantized_add(self):
         class QAddModule(torch.nn.Module):
@@ -2465,29 +2472,50 @@ class TestQuantizedOps(unittest.TestCase):
                 super(QAddModule, self).__init__()
                 self.quant1 = torch.quantization.QuantStub()
                 self.quant2 = torch.quantization.QuantStub()
+                self.dequant = torch.quantization.DeQuantStub()
 
             def forward(self, x, y):
-                return torch.ops.quantized.add(self.quant1(x), self.quant2(y), 1.0, 0)
+                res = torch.ops.quantized.add(self.quant1(x), self.quant2(y), 1.0, 0)
+                return self.dequant(res)
 
-        self.generic_test(QAddModule(), (torch.tensor(3.0), torch.tensor(4.0)))
+        x = np.random.random(2).astype("float32")
+        y = np.random.random(2).astype("float32")
+        self.generic_test(QAddModule(), (x, y), input_names=["x", "y"])
 
     def test_quantized_relu(self):
         self.generic_unary_test(torch.nn.ReLU())
 
-    def test_quantized_linear(self):
-        class QLinear(torch.nn.Module):
-            @staticmethod
-            def forward(x, y):
-                qx = torch.quantize_per_tensor(x, 1.0, 0, torch.quint8)
-                qlinear = nnq.Linear(2, 2)
-                weight = torch.quantize_per_tensor(y, 1.0, 0, torch.qint8)
-                bias = torch.ones(2).to(torch.float)
-                qlinear.set_weight_bias(weight, bias)
-                out = qlinear(qx)
-                return out.dequantize()
-        x = torch.ones(2, 2, 2, 2)
-        y = torch.ones(2, 2)
-        torch.onnx.export(QLinear(), (x, y), os.path.join("model.onnx"), operator_export_type=torch.onnx.OperatorExportTypes.ONNX_ATEN_FALLBACK)
+    def test_qlinear_model(self):
+        class LinearModel(torch.nn.Module):
+            def __init__(self):
+                super(LinearModel, self).__init__()
+                self.qconfig = torch.quantization.default_qconfig
+                self.fc1 = torch.quantization.QuantWrapper(torch.nn.Linear(5, 10).to(dtype=torch.float))
+
+            def forward(self, x):
+                x = self.fc1(x)
+                return x
+
+        qconfig = torch.quantization.default_qconfig
+        model = LinearModel()
+        model.qconfig = qconfig
+        model = torch.quantization.prepare(model)
+        model = torch.quantization.convert(model)
+
+        x_numpy = np.random.rand(1, 2, 5).astype(np.float32)
+        x = torch.from_numpy(x_numpy).to(dtype=torch.float)
+        outputs = model(x)
+        traced = torch.jit.trace(model, x)
+        buf = io.BytesIO()
+        torch.jit.save(traced, buf)
+        buf.seek(0)
+        torch.backends.quantized.engine = "qnnpack"
+        model = torch.jit.load(buf)
+        input_names = ["x"]
+        torch.onnx.export(model, x, os.path.join("model.onnx"), verbose=True, input_names=input_names, example_outputs=outputs, operator_export_type=torch.onnx.OperatorExportTypes.ONNX_ATEN_FALLBACK)
+        onnx_model = onnx.load('model.onnx')
+        caffe_res = c2.run_model(onnx_model, dict(zip(input_names, x_numpy)))[0]
+        np.testing.assert_almost_equal(np.squeeze(outputs.numpy()), caffe_res, decimal=3)
 
 
 if __name__ == '__main__':

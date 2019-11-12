@@ -9,8 +9,13 @@ def linear_prepack(g, weight, bias):
     sym_help._quantized_ops.add(output)
     return output
 
-def linear(g, input, weight, scale, zero_point):
-    output = g.op("_caffe2::Int8FC", input, weight, scale, zero_point)
+@parse_args('v', 'v', 'v', 'f', 'i')
+def linear(g, input, weight, bias, scale, zero_point):
+    kwargs = {
+        "Y_scale_f": scale,
+        "Y_zero_point_i": zero_point,
+    }
+    output = g.op("_caffe2::Int8FC", input, weight, bias, **kwargs)
     sym_help._quantized_ops.add(output)
     return output
 
@@ -22,13 +27,23 @@ def conv_prepack(g, input, weight, bias, stride, padding, dilation, groups):
     sym_help._quantized_ops.add(output)
     return output
 
-def conv2d(g, input, weight, stride, padding, dilation, groups, scale, zero_point):
-    output = g.op("_caffe2::Int8Conv", input, weight, stride, padding, dilation, groups, scale, zero_point)
+@parse_args('v', 'v', 'v', 'is', 'is', 'is', 'i', 'f', 'i')
+def conv2d(g, input, weight, bias, stride, padding, dilation, groups, scale, zero_point):
+    kwargs = {
+        "Y_scale_f": scale,
+        "Y_zero_point_i": zero_point,
+    }
+    output = g.op("_caffe2::Int8Conv", input, weight, bias, stride, padding, dilation, groups, **kwargs)
     sym_help._quantized_ops.add(output)
     return output
 
-def conv2d_relu(g, input, weight, stride, padding, dilation, groups, scale, zero_point):
-    output = g.op("_caffe2::Int8ConvRelu", input, weight, stride, padding, dilation, groups, scale, zero_point)
+@parse_args('v', 'v', 'v', 'is', 'is', 'is', 'i', 'f', 'i')
+def conv2d_relu(g, input, weight, bias, stride, padding, dilation, groups, scale, zero_point):
+    kwargs = {
+        "Y_scale_f": scale,
+        "Y_zero_point_i": zero_point,
+    }
+    output = g.op("_caffe2::Int8ConvRelu", input, weight, bias, stride, padding, dilation, groups, **kwargs)
     sym_help._quantized_ops.add(output)
     return output
 
@@ -47,6 +62,7 @@ def upsample_nearest_2d(g, input, size, scale_factor, mode, align_corners):
     sym_help._quantized_ops.add(output)
     return output
 
+@parse_args('v')
 def relu(g, input):
     output = g.op("_caffe2::Int8Relu", input)
     sym_help._quantized_ops.add(output)
