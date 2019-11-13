@@ -13415,6 +13415,26 @@ class TestTorchDeviceType(TestCase):
         result = torch.cat(concat_list)
         self.assertEqual(result.size(0), SIZE1 + SIZE2)
 
+    def test_index_add(self, device):
+        # test coverage for issue with atomic add:
+        # https://github.com/pytorch/pytorch/issues/29475
+        def is_signed(dtype):
+            return torch.is_signed(torch.tensor(0, dtype=dtype))
+        for dtype in torch.testing.get_all_math_dtypes(device):
+            # print(dtype)
+            size = [5, 5]
+            if dtype.is_floating_point:
+                tensor = torch.rand(size, dtype=dtype, device=device)
+            elif is_signed(dtype):
+                tensor = torch.randint(-5, 15, size, dtype=dtype, device=device)
+            else:
+                tensor = torch.randint(0, 10, size, dtype=dtype, device=device)
+
+            # index_add calls atomicAdd on cuda.
+            empty = torch.zeros(size, dtype=dtype, device=device)
+            added = empty.index_add(0, torch.arange(0, size[0], dtype=torch.long, device=device), tensor)
+            self.assertEqual(added, tensor)
+
 
 # Tests that compare a device's computation with the (gold-standard) CPU's.
 class TestDevicePrecision(TestCase):
